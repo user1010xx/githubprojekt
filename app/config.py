@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     # --- Ollama ---
     ollama_base_url: str = Field("http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field("llama3.2:1b", alias="OLLAMA_MODEL")
-    ollama_timeout_seconds: float = Field(180.0, alias="OLLAMA_TIMEOUT_SECONDS")
+    # Chat can be slow on CPU (Railway)
+    ollama_timeout_seconds: float = Field(300.0, alias="OLLAMA_TIMEOUT_SECONDS")
 
     # --- Bot davranışı ---
     # Rising eşiği: pencere içindeki star artışı (varsayılan 5)
