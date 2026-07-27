@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         procps \
         bash \
+        zstd \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Ollama binary (open-source local AI)
+# Ollama binary (install.sh needs zstd to extract the archive)
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
 WORKDIR /app
