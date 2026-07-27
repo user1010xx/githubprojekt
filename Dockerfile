@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
         bash \
         zstd \
-        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Ollama binary (install.sh needs zstd to extract the archive)
