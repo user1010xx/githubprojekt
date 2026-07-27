@@ -1,28 +1,19 @@
-# Tek servis: Ollama projeye gömülü (bot container içinde)
-# Kullanım:
-#   1) .env doldur (TELEGRAM_* + GITHUB_TOKEN)
-#   2) docker compose up -d --build
-# İlk açılışta model indirmesi birkaç dakika sürebilir.
-
+# Bot only (Grok API — no local Ollama)
 services:
   bot:
     build: .
     env_file:
       - .env
     environment:
-      OLLAMA_BASE_URL: http://127.0.0.1:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
-      OLLAMA_HOST: 0.0.0.0:11434
       DATABASE_PATH: /app/data/bot.db
       PORT: "8080"
+      GROK_MODEL: ${GROK_MODEL:-grok-4.3}
+      GROK_BASE_URL: ${GROK_BASE_URL:-https://api.x.ai/v1}
     ports:
       - "8080:8080"
     volumes:
-      # Model + DB kalıcı olsun
       - bot_data:/app/data
-      - ollama_data:/root/.ollama
     restart: unless-stopped
 
 volumes:
   bot_data:
-  ollama_data:

@@ -20,7 +20,7 @@ logger = logging.getLogger("rising_bot")
 _state: dict[str, Any] = {
     "ready": False,
     "error": None,
-    "ai": "ollama",
+    "ai": "grok-4.3",
 }
 
 
@@ -38,12 +38,10 @@ async def health(_: Request) -> JSONResponse:
 
 
 async def health_plain(_: Request) -> PlainTextResponse:
-    # Some probes prefer plain 200 body
     return PlainTextResponse("ok")
 
 
 async def scan_loop(scanner: Any, interval: int) -> None:
-    # First scan almost immediately (no long idle after deploy)
     await asyncio.sleep(2)
     while True:
         started = asyncio.get_running_loop().time()
@@ -68,7 +66,7 @@ async def scan_loop(scanner: Any, interval: int) -> None:
 async def bootstrap(settings: Any) -> None:
     from app.db import Database
     from app.github_client import GitHubClient
-    from app.ollama_client import OllamaClient, normalize_ollama_base_url
+    from app.grok_client import GrokClient
     from app.scanner import RisingScanner
     from app.summarizer import Summarizer
     from app.telegram_client import TelegramClient
@@ -76,61 +74,55 @@ async def bootstrap(settings: Any) -> None:
     db: Database | None = None
     github: GitHubClient | None = None
     telegram: TelegramClient | None = None
-    ollama: OllamaClient | None = None
+    grok: GrokClient | None = None
     loop_task: asyncio.Task[None] | None = None
 
     try:
-        ollama_url = normalize_ollama_base_url(settings.ollama_base_url)
         logger.info(
-            "Bootstrap start model=%s url=%s min_stars=%s",
-            settings.ollama_model,
-            ollama_url,
+            "Bootstrap: AI=Grok model=%s base=%s min_stars=%s",
+            settings.grok_model,
+            settings.grok_base_url,
             settings.min_stars_24h,
         )
+        _state["ai"] = settings.grok_model
 
         db = Database(settings.database_path)
         await db.connect()
 
-        ollama = OllamaClient(
-            base_url=ollama_url,
-            model=settings.ollama_model,
-            timeout=settings.ollama_timeout_seconds,
+        grok = GrokClient(
+            api_key=settings.xai_api_key,
+            model=settings.grok_model,
+            base_url=settings.grok_base_url,
+            timeout=settings.grok_timeout_seconds,
         )
-        if await ollama.healthcheck():
-            logger.info("Ollama API reachable")
-        else:
-            logger.warning("Ollama not ready yet — fallback summaries until it is")
-
         github = GitHubClient(settings.github_token)
-        summarizer = Summarizer(ollama)
+        summarizer = Summarizer(grok)
         telegram = TelegramClient(
             settings.telegram_bot_token, settings.telegram_chat_id
         )
 
-        # Prove Telegram path works after every deploy
         try:
             await telegram.send_message(
                 "✅ GitHub Rising bot aktif.\n"
                 f"• Eşik: +{settings.min_stars_24h} star\n"
                 f"• Tarama: her {settings.scan_interval_seconds // 60} dk\n"
-                f"• AI: Ollama ({settings.ollama_model}) — yoksa şablon özet\n"
+                f"• AI: Grok ({settings.grok_model})\n"
                 "Rising repo bulunca buraya yazar."
             )
             logger.info("Startup Telegram ping sent")
         except Exception:
             logger.exception(
-                "Startup Telegram ping FAILED — check TELEGRAM_BOT_TOKEN / CHAT_ID / bot in group"
+                "Startup Telegram ping FAILED — check TELEGRAM_BOT_TOKEN / CHAT_ID"
             )
 
         scanner = RisingScanner(settings, db, github, summarizer, telegram)
-
         loop_task = asyncio.create_task(
             scan_loop(scanner, settings.scan_interval_seconds),
             name="scan_loop",
         )
         _state["ready"] = True
         _state["error"] = None
-        logger.info("Bootstrap complete — scanner running")
+        logger.info("Bootstrap complete — scanner running (Ollama disabled)")
         await loop_task
     except asyncio.CancelledError:
         raise
@@ -151,8 +143,8 @@ async def bootstrap(settings: Any) -> None:
             await github.close()
         if telegram is not None:
             await telegram.close()
-        if ollama is not None:
-            await ollama.close()
+        if grok is not None:
+            await grok.close()
         if db is not None:
             await db.close()
 
@@ -197,7 +189,6 @@ def main() -> None:
         stream=sys.stdout,
         force=True,
     )
-    # Immediate signal in Railway deploy logs
     print(f"[main] starting version={__version__} PORT={_port()}", flush=True)
 
     settings = None
@@ -209,9 +200,8 @@ def main() -> None:
             getattr(logging, settings.log_level.upper(), logging.INFO)
         )
         port = settings.port
-        print("[main] config ok", flush=True)
+        print("[main] config ok (AI=Grok)", flush=True)
     except Exception as exc:
-        # Still serve /health so Railway does not loop on "unavailable"
         print(f"[main] CONFIG ERROR (health-only mode): {exc}", flush=True)
         logger.exception("Config error — health-only mode")
         _state["error"] = f"config: {exc}"
