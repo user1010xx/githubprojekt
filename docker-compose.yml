@@ -1,42 +1,28 @@
-# Yerel tam yığın: Ollama (açık kaynak AI) + bot
+# Tek servis: Ollama projeye gömülü (bot container içinde)
 # Kullanım:
-#   1) .env dosyasını doldur (TELEGRAM_* + GITHUB_TOKEN)
-#   2) docker compose up -d
-#   3) ilk model: docker compose exec ollama ollama pull llama3.2
+#   1) .env doldur (TELEGRAM_* + GITHUB_TOKEN)
+#   2) docker compose up -d --build
+# İlk açılışta model indirmesi birkaç dakika sürebilir.
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 10s
-      retries: 12
-      start_period: 20s
-
   bot:
     build: .
-    depends_on:
-      ollama:
-        condition: service_healthy
     env_file:
       - .env
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
+      OLLAMA_HOST: 0.0.0.0:11434
       DATABASE_PATH: /app/data/bot.db
       PORT: "8080"
     ports:
       - "8080:8080"
     volumes:
+      # Model + DB kalıcı olsun
       - bot_data:/app/data
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
 volumes:
-  ollama_data:
   bot_data:
+  ollama_data:

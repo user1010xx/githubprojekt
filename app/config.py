@@ -11,7 +11,8 @@ class Settings(BaseSettings):
       1) TELEGRAM_BOT_TOKEN  (+ TELEGRAM_CHAT_ID)
       2) GITHUB_TOKEN
 
-    AI = Ollama (API key yok). Adres/model isteğe bağlı env ile değişir.
+    AI = container içine gömülü Ollama (API key yok).
+    Docker/Railway start.sh Ollama'yı aynı süreçte ayağa kaldırır.
     """
 
     model_config = SettingsConfigDict(
@@ -27,10 +28,11 @@ class Settings(BaseSettings):
     # --- 2) GitHub ---
     github_token: str = Field(..., alias="GITHUB_TOKEN", min_length=10)
 
-    # --- Ollama (açık kaynak AI, key yok) ---
+    # --- Ollama (gömülü; ayrı key / servis gerekmez) ---
     ollama_base_url: str = Field("http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field("llama3.2", alias="OLLAMA_MODEL")
-    ollama_timeout_seconds: float = Field(120.0, alias="OLLAMA_TIMEOUT_SECONDS")
+    # Railway RAM için varsayılan küçük model; istersen llama3.2 veya llama3.2:3b
+    ollama_model: str = Field("llama3.2:1b", alias="OLLAMA_MODEL")
+    ollama_timeout_seconds: float = Field(180.0, alias="OLLAMA_TIMEOUT_SECONDS")
 
     # --- Bot davranışı ---
     min_stars_24h: int = Field(30, alias="MIN_STARS_24H", ge=1)

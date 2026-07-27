@@ -1,33 +1,87 @@
-# GitHub Rising → Telegram Bot (Ollama AI)
+# GitHub Rising → Telegram Bot (gömülü Ollama)
 
-Son ~24 saatte **yüksek star artışı** (rising) gösteren public GitHub repolarını bulur, **Ollama (açık kaynak AI)** ile Türkçe özetler ve bir **Telegram grubuna** iletir.
+Son ~24 saatte **yüksek star artışı** (rising) gösteren public GitHub repolarını bulur, **container içindeki Ollama** ile Türkçe özetler ve bir **Telegram grubuna** iletir.
 
 - Tarama: **10 dakika**
-- AI: **yalnızca Ollama** (API key yok)
+- AI: **projeye gömülü Ollama** (ayrı AI API key yok)
 - Zorunlu sırlar: **Telegram token + GitHub token**
-- Dağıtım: Railway veya Docker Compose
+- Deploy: **Railway** veya `docker compose`
 
 ## Zorunlu ayarlar (2 token)
 
 | # | Değişken | Ne |
 |---|----------|-----|
 | 1 | `TELEGRAM_BOT_TOKEN` | BotFather token |
-| 1b | `TELEGRAM_CHAT_ID` | Grup id (token değil, hedef adres) |
+| 1b | `TELEGRAM_CHAT_ID` | Grup id |
 | 2 | `GITHUB_TOKEN` | GitHub PAT |
 
-AI için **üçüncü bir API key yok**. Özetleme Ollama üzerinden yapılır.
+**Ollama ayrı kurulmaz.** Docker image içinde gelir; `scripts/start.sh` hem Ollama’yı hem botu başlatır.
 
-## AI ne yapar? (kod + prompt)
+## Mimari (gömülü AI)
+
+```
+┌─────────────────────────────────────┐
+│  Tek container (Dockerfile)         │
+│  ┌─────────────┐  ┌──────────────┐  │
+│  │ ollama serve│←→│ Python bot   │  │
+│  │ llama3.2:1b │  │ scan+Telegram│  │
+│  └─────────────┘  └──────────────┘  │
+└─────────────────────────────────────┘
+```
 
 | Dosya | Görev |
 |-------|--------|
-| `app/prompts.py` | AI rolü, kurallar, çıktı formatı, user prompt şablonu |
-| `app/ollama_client.py` | Ollama `/api/chat` çağrısı |
-| `app/summarizer.py` | Repo → prompt → Ollama → metin (hata olursa fallback) |
+| `Dockerfile` | Ollama base + Python bot |
+| `scripts/start.sh` | Ollama başlat → model pull → bot |
+| `app/prompts.py` | AI görev tanımı + prompt |
+| `app/ollama_client.py` | `127.0.0.1:11434` chat |
+| `app/summarizer.py` | Özet katmanı |
 
-AI **sadece özet üretir**. Rising filtreleme, star hesabı ve Telegram gönderimi bot kodundadır.
+Varsayılan model: **`llama3.2:1b`** (Railway RAM’ine uygun, açık ağırlık).  
+Daha kaliteli istersen: `OLLAMA_MODEL=llama3.2` veya `llama3.2:3b` (daha fazla bellek).
 
-Çıktı formatı:
+## Railway
+
+1. Repo bağla (Dockerfile build).
+2. **Variables:**
+   ```
+   TELEGRAM_BOT_TOKEN=
+   TELEGRAM_CHAT_ID=
+   GITHUB_TOKEN=
+   OLLAMA_MODEL=llama3.2:1b
+   ```
+3. **Volume önerisi (önemli):**
+   - `/root/.ollama` → model her deploy’da yeniden inmesin  
+   - `/app/data` → SQLite dedup kalsın  
+4. Redeploy. İlk boot’ta model indirme **birkaç dakika** sürebilir.
+5. Log’da ara: `Embedded Ollama starting`, `Ollama API ready`, `Model ready`, `Starting scan cycle`.
+
+> Not: CPU’da 1B model yavaş olabilir; özet başına 30–120 sn normal.  
+> Planında **en az ~2 GB RAM** olsun; yoksa OOM / restart riski var.
+
+## Docker Compose (lokal)
+
+```bash
+copy .env.example .env   # tokenları doldur
+docker compose up -d --build
+```
+
+Health: http://localhost:8080/health
+
+## Telegram grup
+
+1. BotFather → token  
+2. Botu gruba ekle  
+3. Chat id → `TELEGRAM_CHAT_ID`  
+4. GitHub PAT → `GITHUB_TOKEN`
+
+## AI ne yapar?
+
+`app/prompts.py` içinde sabit:
+
+1. Repo meta + README oku  
+2. Mantık / kullanım alanı çıkar  
+3. Şu formatta Türkçe yaz:
 
 ```
 🔗 Github link :
@@ -37,97 +91,28 @@ AI **sadece özet üretir**. Rising filtreleme, star hesabı ve Telegram gönder
 📝 Açıklama :
 ```
 
-## Ollama kurulumu
-
-### A) Bilgisayarında (geliştirme)
-
-1. [Ollama](https://ollama.com) kur  
-2. Model çek:
-   ```bash
-   ollama pull llama3.2
-   ```
-3. `.env`:
-   ```env
-   TELEGRAM_BOT_TOKEN=...
-   TELEGRAM_CHAT_ID=...
-   GITHUB_TOKEN=...
-   OLLAMA_BASE_URL=http://127.0.0.1:11434
-   OLLAMA_MODEL=llama3.2
-   ```
-4. Bot:
-   ```bash
-   pip install -r requirements.txt
-   python -m app.main
-   ```
-
-### B) Docker Compose (bot + Ollama birlikte)
-
-```bash
-copy .env.example .env   # tokenları doldur
-docker compose up -d
-docker compose exec ollama ollama pull llama3.2
-```
-
-Compose içinde bot `OLLAMA_BASE_URL=http://ollama:11434` kullanır.
-
-### C) Railway
-
-Railway container’ında GPU’lu büyük model genelde pratik değil. Seçenekler:
-
-1. **Ollama’yı ayrı çalıştır** (VPS / ev sunucusu / GPU’lu makine), public veya private URL ver:
-   ```env
-   OLLAMA_BASE_URL=https://ollama.senin-domainin.com
-   OLLAMA_MODEL=llama3.2
-   ```
-2. Bot servisini Railway’de tut; sadece 2 token + `OLLAMA_BASE_URL` set et.
-
-Volume önerisi: `/app/data` → SQLite dedup kalıcı olsun.
-
-## Telegram grup
-
-1. BotFather → bot → token  
-2. Grup aç → botu ekle  
-3. Chat id al (`getUpdates` veya id botu) → `TELEGRAM_CHAT_ID`  
-4. `GITHUB_TOKEN` ekle  
-5. Ollama’nın ayakta olduğundan emin ol  
+Rising filtre + Telegram gönderimi **bot kodunda**; model sadece anlatır.
 
 ## Opsiyonel env
 
 ```
+OLLAMA_MODEL=llama3.2:1b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=llama3.2
 MIN_STARS_24H=30
 MAX_CANDIDATES=25
 MAX_NOTIFICATIONS_PER_SCAN=5
-DEDUP_HOURS=48
 SCAN_INTERVAL_SECONDS=600
-DATABASE_PATH=./data/bot.db
 ```
 
-## Proje yapısı
+## Yerel geliştirme (Docker’sız)
 
-```
-app/
-  main.py             # health + 10 dk döngü
-  config.py           # 2 token + ollama ayarları
-  github_client.py    # adaylar, 24s star, README
-  scanner.py          # rising filtre + bildirim
-  prompts.py          # AI görev tanımı + prompt
-  ollama_client.py    # açık kaynak AI istemcisi
-  summarizer.py       # AI özet katmanı
-  telegram_client.py
-  db.py
-docker-compose.yml    # ollama + bot
-Dockerfile
-railway.toml
+Sadece kodu koşturuyorsan makinede Ollama gerekir:
+
+```bash
+ollama serve
+ollama pull llama3.2:1b
+pip install -r requirements.txt
+python -m app.main
 ```
 
-## Akış
-
-```
-GitHub (token) → rising adaylar → eşik geçti mi?
-       ↓ evet
-README + meta → Ollama (prompt) → Türkçe özet
-       ↓
-Telegram grup (token)
-```
+Production yolu: **gömülü image** (Railway / Compose).

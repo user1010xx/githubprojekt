@@ -68,7 +68,7 @@ async def run() -> None:
 
     ollama_url = normalize_ollama_base_url(settings.ollama_base_url)
     logger.info(
-        "AI=Ollama model=%s base_url=%s | min_stars_24h=%s interval=%ss",
+        "AI=embedded Ollama model=%s base_url=%s | min_stars_24h=%s interval=%ss",
         settings.ollama_model,
         ollama_url,
         settings.min_stars_24h,
