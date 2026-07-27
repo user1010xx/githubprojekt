@@ -29,7 +29,7 @@ RUN chmod +x /start.sh \
     && mkdir -p /app/data /root/.ollama \
     && sed -i 's/\r$//' /start.sh
 
-ENV OLLAMA_HOST=127.0.0.1:11434 \
+ENV OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_BASE_URL=http://127.0.0.1:11434 \
     OLLAMA_MODEL=llama3.2:1b \
     DATABASE_PATH=/app/data/bot.db \
