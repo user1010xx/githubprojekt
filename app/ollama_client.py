@@ -60,7 +60,10 @@ class OllamaClient:
 
     async def healthcheck(self) -> bool:
         try:
-            response = await self._client.get(f"{self.base_url}/api/tags")
+            response = await self._client.get(
+                f"{self.base_url}/api/tags",
+                timeout=3.0,
+            )
             return response.status_code == 200
         except httpx.HTTPError as exc:
             logger.warning("Ollama healthcheck failed: %s", exc)
