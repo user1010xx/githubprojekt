@@ -36,6 +36,11 @@ class Database:
                 total_stars INTEGER NOT NULL,
                 sent_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         await self._db.commit()
@@ -149,3 +154,28 @@ class Database:
             (full_name, stars_24h, total_stars, now),
         )
         await db.commit()
+
+    async def get_meta(self, key: str) -> str | None:
+        db = self._require_db()
+        cursor = await db.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+        return str(row["value"]) if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        db = self._require_db()
+        await db.execute(
+            """
+            INSERT INTO meta(key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        await db.commit()
+
+    async def is_morning_catchup_done(self) -> bool:
+        return (await self.get_meta("morning_catchup_done")) == "1"
+
+    async def mark_morning_catchup_done(self) -> None:
+        await self.set_meta("morning_catchup_done", "1")

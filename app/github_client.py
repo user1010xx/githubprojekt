@@ -116,12 +116,17 @@ class GitHubClient:
 
         return candidates
 
-    async def count_stars_last_24h(self, full_name: str, total_stars: int) -> int:
+    async def count_stars_since(
+        self,
+        full_name: str,
+        total_stars: int,
+        cutoff: datetime,
+    ) -> int:
         """
-        Count stars in the last 24h by walking stargazer pages from the newest end.
+        Count stars with starred_at >= cutoff (walk newest stargazer pages).
 
         Returns:
-          >= 0 : counted stars in last 24h
+          >= 0 : counted stars
           -1   : could not measure (API blocked / error) — use snapshot fallback
         """
         if total_stars <= 0:
@@ -131,13 +136,15 @@ class GitHubClient:
             logger.warning("Invalid full_name: %s", full_name)
             return -1
 
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+
         owner, repo = full_name.split("/", 1)
         per_page = 100
         last_page = max(1, (total_stars + per_page - 1) // per_page)
         # GitHub list endpoints effectively cap around 400 pages for some resources
         last_page = min(last_page, 400)
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         count = 0
         pages_checked = 0
         max_pages = 8  # up to 800 most recent stars
@@ -211,6 +218,10 @@ class GitHubClient:
         if pages_checked == 0 and saw_error:
             return -1
         return count
+
+    async def count_stars_last_24h(self, full_name: str, total_stars: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        return await self.count_stars_since(full_name, total_stars, cutoff)
 
     async def fetch_readme_excerpt(self, full_name: str, max_chars: int = 4000) -> str:
         if "/" not in full_name:
