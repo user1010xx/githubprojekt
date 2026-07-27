@@ -43,7 +43,8 @@ async def health_plain(_: Request) -> PlainTextResponse:
 
 
 async def scan_loop(scanner: Any, interval: int) -> None:
-    await asyncio.sleep(5)
+    # First scan almost immediately (no long idle after deploy)
+    await asyncio.sleep(2)
     while True:
         started = asyncio.get_running_loop().time()
         try:
@@ -105,6 +106,22 @@ async def bootstrap(settings: Any) -> None:
         telegram = TelegramClient(
             settings.telegram_bot_token, settings.telegram_chat_id
         )
+
+        # Prove Telegram path works after every deploy
+        try:
+            await telegram.send_message(
+                "✅ GitHub Rising bot aktif.\n"
+                f"• Eşik: +{settings.min_stars_24h} star\n"
+                f"• Tarama: her {settings.scan_interval_seconds // 60} dk\n"
+                f"• AI: Ollama ({settings.ollama_model}) — yoksa şablon özet\n"
+                "Rising repo bulunca buraya yazar."
+            )
+            logger.info("Startup Telegram ping sent")
+        except Exception:
+            logger.exception(
+                "Startup Telegram ping FAILED — check TELEGRAM_BOT_TOKEN / CHAT_ID / bot in group"
+            )
+
         scanner = RisingScanner(settings, db, github, summarizer, telegram)
 
         loop_task = asyncio.create_task(
