@@ -2,28 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 import uvicorn
 
 from app import __version__
-from app.config import get_settings
-from app.db import Database
-from app.github_client import GitHubClient
-from app.ollama_client import OllamaClient, normalize_ollama_base_url
-from app.scanner import RisingScanner
-from app.summarizer import Summarizer
-from app.telegram_client import TelegramClient
 
 logger = logging.getLogger("rising_bot")
 
-# Shared runtime state (filled after HTTP is already up)
 _state: dict[str, Any] = {
     "ready": False,
     "error": None,
@@ -32,7 +25,6 @@ _state: dict[str, Any] = {
 
 
 async def health(_: Request) -> JSONResponse:
-    """Railway healthcheck — always 200 once uvicorn is listening."""
     return JSONResponse(
         {
             "status": "ok",
@@ -40,11 +32,17 @@ async def health(_: Request) -> JSONResponse:
             "ready": bool(_state.get("ready")),
             "ai": _state.get("ai"),
             "error": _state.get("error"),
+            "port": os.environ.get("PORT"),
         }
     )
 
 
-async def scan_loop(scanner: RisingScanner, interval: int) -> None:
+async def health_plain(_: Request) -> PlainTextResponse:
+    # Some probes prefer plain 200 body
+    return PlainTextResponse("ok")
+
+
+async def scan_loop(scanner: Any, interval: int) -> None:
     await asyncio.sleep(5)
     while True:
         started = asyncio.get_running_loop().time()
@@ -67,7 +65,13 @@ async def scan_loop(scanner: RisingScanner, interval: int) -> None:
 
 
 async def bootstrap(settings: Any) -> None:
-    """Heavy init after /health is already serving."""
+    from app.db import Database
+    from app.github_client import GitHubClient
+    from app.ollama_client import OllamaClient, normalize_ollama_base_url
+    from app.scanner import RisingScanner
+    from app.summarizer import Summarizer
+    from app.telegram_client import TelegramClient
+
     db: Database | None = None
     github: GitHubClient | None = None
     telegram: TelegramClient | None = None
@@ -77,7 +81,7 @@ async def bootstrap(settings: Any) -> None:
     try:
         ollama_url = normalize_ollama_base_url(settings.ollama_base_url)
         logger.info(
-            "Bootstrap: embedded Ollama model=%s base_url=%s min_stars=%s",
+            "Bootstrap start model=%s url=%s min_stars=%s",
             settings.ollama_model,
             ollama_url,
             settings.min_stars_24h,
@@ -89,24 +93,12 @@ async def bootstrap(settings: Any) -> None:
         ollama = OllamaClient(
             base_url=ollama_url,
             model=settings.ollama_model,
-            timeout=min(settings.ollama_timeout_seconds, 30.0),
+            timeout=settings.ollama_timeout_seconds,
         )
-        # Short check only — never block deploy on model download
         if await ollama.healthcheck():
             logger.info("Ollama API reachable")
         else:
-            logger.warning(
-                "Ollama not ready yet (%s) — summaries may use fallback",
-                ollama_url,
-            )
-
-        # Full timeout for real chat calls
-        await ollama.close()
-        ollama = OllamaClient(
-            base_url=ollama_url,
-            model=settings.ollama_model,
-            timeout=settings.ollama_timeout_seconds,
-        )
+            logger.warning("Ollama not ready yet — fallback summaries until it is")
 
         github = GitHubClient(settings.github_token)
         summarizer = Summarizer(ollama)
@@ -122,16 +114,13 @@ async def bootstrap(settings: Any) -> None:
         _state["ready"] = True
         _state["error"] = None
         logger.info("Bootstrap complete — scanner running")
-
-        # Keep bootstrap task alive until cancelled
         await loop_task
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.exception("Bootstrap failed")
+        logger.exception("Bootstrap failed (HTTP stays up)")
         _state["ready"] = False
         _state["error"] = str(exc)
-        # Keep process alive so /health still returns 200 for Railway
         while True:
             await asyncio.sleep(3600)
     finally:
@@ -149,26 +138,39 @@ async def bootstrap(settings: Any) -> None:
             await ollama.close()
         if db is not None:
             await db.close()
-        logger.info("Bootstrap shutdown complete")
 
 
-def build_app(settings: Any) -> Starlette:
+def build_app(settings: Any | None) -> Starlette:
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        task = asyncio.create_task(bootstrap(settings), name="bootstrap")
+        task: asyncio.Task[None] | None = None
+        if settings is not None:
+            task = asyncio.create_task(bootstrap(settings), name="bootstrap")
         try:
             yield
         finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     return Starlette(
-        routes=[Route("/health", health), Route("/", health)],
+        routes=[
+            Route("/health", health),
+            Route("/", health_plain),
+        ],
         lifespan=lifespan,
     )
+
+
+def _port() -> int:
+    raw = os.environ.get("PORT", "8080").strip() or "8080"
+    try:
+        return int(raw)
+    except ValueError:
+        return 8080
 
 
 def main() -> None:
@@ -176,38 +178,40 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         stream=sys.stdout,
+        force=True,
     )
+    # Immediate signal in Railway deploy logs
+    print(f"[main] starting version={__version__} PORT={_port()}", flush=True)
 
+    settings = None
     try:
-        settings = get_settings()
-    except Exception:
-        logger.exception(
-            "Config error — set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GITHUB_TOKEN"
-        )
-        raise
+        from app.config import get_settings
 
-    logging.getLogger().setLevel(
-        getattr(logging, settings.log_level.upper(), logging.INFO)
-    )
+        settings = get_settings()
+        logging.getLogger().setLevel(
+            getattr(logging, settings.log_level.upper(), logging.INFO)
+        )
+        port = settings.port
+        print("[main] config ok", flush=True)
+    except Exception as exc:
+        # Still serve /health so Railway does not loop on "unavailable"
+        print(f"[main] CONFIG ERROR (health-only mode): {exc}", flush=True)
+        logger.exception("Config error — health-only mode")
+        _state["error"] = f"config: {exc}"
+        port = _port()
 
     app = build_app(settings)
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=settings.port,
-        log_level=settings.log_level.lower(),
-        # Fail fast if port busy; bind ASAP for healthchecks
-        timeout_keep_alive=5,
+        port=port,
+        log_level="info",
+        access_log=True,
     )
     server = uvicorn.Server(config)
-    logger.info(
-        "Binding HTTP on 0.0.0.0:%s (/health) before full bootstrap",
-        settings.port,
-    )
-    try:
-        server.run()
-    except KeyboardInterrupt:
-        logger.info("Interrupted")
+    print(f"[main] binding 0.0.0.0:{port} /health", flush=True)
+    server.run()
+    print("[main] server stopped", flush=True)
 
 
 if __name__ == "__main__":

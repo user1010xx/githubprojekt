@@ -3,8 +3,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/health"
-# Bot hemen ayağa kalkar; Ollama arka planda. 60s yeterli.
-healthcheckTimeout = 120
+# Healthcheck KAPALI: worker bot + gömülü Ollama ilk saniyelerde
+# "service unavailable" ile deploy'u düşürmesin.
+# HTTP /health yine var; istersen sonra tekrar açarsın.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
