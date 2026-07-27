@@ -23,6 +23,7 @@ class RepoCandidate:
     topics: list[str] = field(default_factory=list)
     default_branch: str = "main"
     is_fork: bool = False
+    created_at: datetime | None = None
     stars_24h: int = 0
     readme_excerpt: str = ""
 
@@ -66,12 +67,13 @@ class GitHubClient:
         day7 = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         day1 = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        # Prefer mid-size / recently active — huge lists often 403 on REST stargazers
+        # Prefer mid-size / new / recently active
+        # (stargazer history often blocked for fine-grained tokens — still useful for search)
         queries = [
+            (f"stars:>=5 created:>{day1} fork:false", "stars"),
             (f"stars:20..2000 created:>{day7} fork:false", "stars"),
             (f"stars:10..5000 pushed:>{day1} fork:false", "updated"),
             ("stars:50..3000 fork:false", "updated"),
-            (f"stars:>100 pushed:>{day7} fork:false", "updated"),
         ]
 
         per_query = max(10, limit // len(queries) + 8)
@@ -98,9 +100,19 @@ class GitHubClient:
                 if item.get("archived") or item.get("disabled"):
                     continue
                 stars = int(item.get("stargazers_count") or 0)
-                # Skip ultra-huge repos (stargazer history is painful / noisy)
                 if stars > 50000:
                     continue
+                created_at = None
+                raw_created = item.get("created_at")
+                if raw_created:
+                    try:
+                        created_at = datetime.fromisoformat(
+                            str(raw_created).replace("Z", "+00:00")
+                        )
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        created_at = None
                 seen.add(full_name)
                 candidates.append(
                     RepoCandidate(
@@ -115,6 +127,7 @@ class GitHubClient:
                         topics=list(item.get("topics") or []),
                         default_branch=item.get("default_branch") or "main",
                         is_fork=bool(item.get("fork")),
+                        created_at=created_at,
                     )
                 )
                 if len(candidates) >= limit:

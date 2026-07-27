@@ -18,7 +18,6 @@ class Database:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
-        # WAL: better concurrent read during long scans
         await self._db.execute("PRAGMA journal_mode=WAL;")
         await self._db.executescript(
             """
@@ -44,12 +43,10 @@ class Database:
             """
         )
         await self._db.commit()
-        # Migrate old ISO-text schemas if present (best-effort, ignore errors)
         await self._maybe_migrate_legacy()
         logger.info("Database ready: %s", self.path)
 
     async def _maybe_migrate_legacy(self) -> None:
-        """If captured_at/sent_at are text ISO, wipe snapshots (safe) once."""
         assert self._db is not None
         try:
             cursor = await self._db.execute(
@@ -60,9 +57,7 @@ class Database:
                 return
             sample = row[0]
             if isinstance(sample, str):
-                logger.warning(
-                    "Legacy text timestamps detected; clearing star_snapshots"
-                )
+                logger.warning("Legacy text timestamps; clearing star_snapshots")
                 await self._db.execute("DELETE FROM star_snapshots")
                 await self._db.commit()
         except Exception:
@@ -85,7 +80,6 @@ class Database:
             "INSERT INTO star_snapshots(full_name, stars, captured_at) VALUES (?, ?, ?)",
             (full_name, stars, now),
         )
-        # Keep ~3 days of history per repo
         cutoff = now - 3 * 24 * 3600
         await db.execute(
             "DELETE FROM star_snapshots WHERE full_name = ? AND captured_at < ?",
@@ -94,7 +88,6 @@ class Database:
         await db.commit()
 
     async def stars_about_24h_ago(self, full_name: str) -> int | None:
-        """Return the snapshot closest to 24h ago (within ±6h), else older fallback."""
         db = self._require_db()
         now = time.time()
         target = now - 24 * 3600
@@ -103,7 +96,7 @@ class Database:
 
         cursor = await db.execute(
             """
-            SELECT stars, captured_at FROM star_snapshots
+            SELECT stars FROM star_snapshots
             WHERE full_name = ? AND captured_at BETWEEN ? AND ?
             ORDER BY ABS(captured_at - ?)
             LIMIT 1
@@ -114,7 +107,6 @@ class Database:
         if row:
             return int(row["stars"])
 
-        # Fallback: oldest snapshot that is at least 12h old
         older = now - 12 * 3600
         cursor = await db.execute(
             """
@@ -124,6 +116,42 @@ class Database:
             LIMIT 1
             """,
             (full_name, older),
+        )
+        row = await cursor.fetchone()
+        return int(row["stars"]) if row else None
+
+    async def oldest_snapshot_stars(self, full_name: str) -> int | None:
+        """Earliest stored star count (for growth since we started watching)."""
+        db = self._require_db()
+        cursor = await db.execute(
+            """
+            SELECT stars FROM star_snapshots
+            WHERE full_name = ?
+            ORDER BY captured_at ASC
+            LIMIT 1
+            """,
+            (full_name,),
+        )
+        row = await cursor.fetchone()
+        return int(row["stars"]) if row else None
+
+    async def previous_snapshot_stars(
+        self, full_name: str, *, min_age_seconds: float = 300
+    ) -> int | None:
+        """
+        Star count from an older snapshot (not the one just written).
+        min_age_seconds: ignore snapshots newer than this (skip 'just now').
+        """
+        db = self._require_db()
+        cutoff = time.time() - min_age_seconds
+        cursor = await db.execute(
+            """
+            SELECT stars FROM star_snapshots
+            WHERE full_name = ? AND captured_at <= ?
+            ORDER BY captured_at DESC
+            LIMIT 1
+            """,
+            (full_name, cutoff),
         )
         row = await cursor.fetchone()
         return int(row["stars"]) if row else None
@@ -157,9 +185,7 @@ class Database:
 
     async def get_meta(self, key: str) -> str | None:
         db = self._require_db()
-        cursor = await db.execute(
-            "SELECT value FROM meta WHERE key = ?", (key,)
-        )
+        cursor = await db.execute("SELECT value FROM meta WHERE key = ?", (key,))
         row = await cursor.fetchone()
         return str(row["value"]) if row else None
 
